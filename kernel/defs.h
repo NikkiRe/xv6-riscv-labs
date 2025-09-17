@@ -142,6 +142,12 @@ int             fetchstr(uint64, char*, int);
 int             fetchaddr(uint64, uint64*);
 void            syscall();
 
+//dump
+uint64 dump(void);
+
+uint64 dump2(int pid, int register_num, uint64 *return_value);
+
+
 // trap.c
 extern uint     ticks;
 void            trapinit(void);

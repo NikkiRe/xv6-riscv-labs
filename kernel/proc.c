@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include <stdint.h>
 
 struct cpu cpus[NCPU];
 
@@ -692,4 +693,69 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+enum dump2_errors {
+    DUMP2_OK = 0,                   
+    DUMP2_EPERM = -1,               //нет прав           
+    DUMP2_ESRCH = -2,               //процесс не найден   
+    DUMP2_EINVAL_REG = -3,          //неверный номер регистра
+    DUMP2_EFAULT = -4,              //ошибка копирования в юзер спейс
+};
+
+//dump_1
+uint64
+dump(void)
+{
+  struct trapframe *tf = myproc()->trapframe;
+  uint64 *s_regs = &tf->s2;
+  
+  for (int i = 0; i < 10; i++)
+       {
+        printf("s%d = %d\n", 2 + i, (int32_t)*(s_regs + i));
+        }
+  
+  return 0;
+}
+
+
+//dump_2
+uint64
+dump2(int pid, int register_num, uint64* return_value)
+{
+
+  if(register_num < 2 || register_num > 11) {
+    return DUMP2_EINVAL_REG;
+  }
+
+  struct proc *p;
+  struct proc *cur = myproc();
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->pid == pid){
+      break;
+    }
+    release(&p->lock);
+  }
+
+  if(p >= &proc[NPROC]) {
+    return DUMP2_ESRCH;
+  }
+
+  if(p != cur && p->parent != cur) {
+    release(&p->lock);
+    return DUMP2_EPERM;
+  }
+
+  int trapframe_idx = register_num + 20;
+  uint64 reg_value = ((uint64*)p->trapframe)[trapframe_idx];
+
+  release(&p->lock);
+
+  if(copyout(cur->pagetable, (uint64)*return_value, (char*)&reg_value, sizeof(reg_value)) < 0) {
+    return DUMP2_EFAULT;
+  }
+
+  return DUMP2_OK;
 }

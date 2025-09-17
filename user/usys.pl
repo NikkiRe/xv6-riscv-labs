@@ -34,5 +34,7 @@ entry("chdir");
 entry("dup");
 entry("getpid");
 entry("sbrk");
+entry("dump");
+entry("dump2");
 entry("sleep");
 entry("uptime");
