@@ -154,6 +154,7 @@ void            trapinit(void);
 void            trapinithart(void);
 extern struct spinlock tickslock;
 void            usertrapret(void);
+void            bd_free(void *p);
 
 // uart.c
 void            uartinit(void);
