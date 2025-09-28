@@ -1,10 +1,8 @@
 //
 // Support functions for system calls that involve file descriptors.
 //
-
 #include "types.h"
 #include "riscv.h"
-#include "defs.h"
 #include "param.h"
 #include "fs.h"
 #include "spinlock.h"
@@ -12,11 +10,11 @@
 #include "file.h"
 #include "stat.h"
 #include "proc.h"
+#include "defs.h"
 
 struct devsw devsw[NDEV];
 struct {
   struct spinlock lock;
-  struct file file[NFILE];
 } ftable;
 
 void
@@ -29,21 +27,21 @@ fileinit(void)
 struct file*
 filealloc(void)
 {
-  struct file *f;
+  struct file* f;
 
   acquire(&ftable.lock);
-  for(f = ftable.file; f < ftable.file + NFILE; f++){
-    if(f->ref == 0){
-      f->ref = 1;
-      release(&ftable.lock);
-      return f;
-    }
+  f = bd_malloc(sizeof(struct file));
+  if(!f) {
+    release(&ftable.lock);
+    return 0;
   }
+  memset(f, 0, sizeof(struct file));
+  f->ref = 1;
+  f->type = FD_NONE;
   release(&ftable.lock);
-  return 0;
+  return f;
 }
 
-// Increment ref count for file f.
 struct file*
 filedup(struct file *f)
 {
@@ -59,7 +57,10 @@ filedup(struct file *f)
 void
 fileclose(struct file *f)
 {
-  struct file ff;
+  int type;
+  struct inode *ip = 0;
+  struct pipe *p = 0;
+  int writable = 0;
 
   acquire(&ftable.lock);
   if(f->ref < 1)
@@ -68,19 +69,32 @@ fileclose(struct file *f)
     release(&ftable.lock);
     return;
   }
-  ff = *f;
+  /* Save necessary fields before clearing */
+  type = f->type;
+  ip = f->ip;
+  p = f->pipe;
+  writable = f->writable;
+
   f->ref = 0;
   f->type = FD_NONE;
+  f->ip = 0;
+  f->pipe = 0;
+  f->readable = 0;
+  f->writable = 0;
+
   release(&ftable.lock);
 
-  if(ff.type == FD_PIPE){
-    pipeclose(ff.pipe, ff.writable);
-  } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
+  if(type == FD_PIPE){
+    pipeclose(p, writable);
+  } else if(type == FD_INODE || type == FD_DEVICE){
     begin_op();
-    iput(ff.ip);
+    iput(ip);
     end_op();
   }
+
+  bd_free(f);
 }
+
 
 // Get metadata about file f.
 // addr is a user virtual address, pointing to a struct stat.
@@ -179,4 +193,3 @@ filewrite(struct file *f, uint64 addr, int n)
 
   return ret;
 }
-
