@@ -144,7 +144,8 @@ void            syscall();
 
 //dump
 uint64 dump(void);
-uint64 dump2(int pid, int register_num, uint64 *return_value);
+uint64 dump2(int pid, int register_num, uint64 return_value);
+//fixed передача адреса
 
 // trap.c
 extern uint     ticks;

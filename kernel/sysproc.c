@@ -106,5 +106,5 @@ sys_dump2(void)
   argint(0, &pid);
   argint(1, &register_num);
   argaddr(2, &return_value);
-  return dump2(pid, register_num, &return_value);
+  return dump2(pid, register_num, return_value); //fixed передача адреса
 }

@@ -6,8 +6,10 @@
 #include "proc.h"
 #include "defs.h"
 #include <stdint.h>
+#include <stddef.h>
+//added offsetof
 
-#define TRAPFRAME_REGS_OFFSET 20
+#define TRAPFRAME_S2_OFFSET (offsetof(struct trapframe, s2) / sizeof(uint64))
 
 struct cpu cpus[NCPU];
 
@@ -696,14 +698,14 @@ procdump(void)
     printf("\n");
   }
 }
-
+//fixed here
 enum dump2_errors {
     DUMP2_OK = 0,                   
     DUMP2_EPERM = -1,               //нет прав           
     DUMP2_ESRCH = -2,               //процесс не найден   
     DUMP2_EINVAL_REG = -3,          //неверный номер регистра
     DUMP2_EFAULT = -4,              //ошибка копирования в юзер спейс
-    DUMP2_EZOMBIE = -5,
+    DUMP2_EZOMBIE = -5,             //процесс зомби
 };
 
 //dump_1
@@ -722,9 +724,8 @@ dump(void)
 
 //dump2
 uint64
-dump2(int pid, int register_num, uint64* return_value)
+dump2(int pid, int register_num, uint64 return_value)
 {
-
   if(register_num < 2 || register_num > 11) {
     return DUMP2_EINVAL_REG;
   }
@@ -732,48 +733,67 @@ dump2(int pid, int register_num, uint64* return_value)
   struct proc *p;
   struct proc *cur = myproc();
 
-  for(p = proc; p < &proc[NPROC]; p++) {
-    acquire(&p->lock);
-    if(p->pid == pid){
+  // Находим процесс
+  p = 0;
+  for(struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
+    acquire(&pp->lock);
+    if(pp->pid == pid) {
+      p = pp;
+      release(&pp->lock);
       break;
     }
-    release(&p->lock);
+    release(&pp->lock);
   }
 
-  if(p >= &proc[NPROC]) {
+  if(p == 0) {
     return DUMP2_ESRCH;
   }
 
-  // Проверка: является ли зомби
+  // Проверяем, не является ли процесс зомби
+  acquire(&p->lock);
   if(p->state == ZOMBIE) {
     release(&p->lock);
     return DUMP2_EZOMBIE;
   }
+  release(&p->lock);
 
-  // Проверка: является ли cur предком p
+  // Проверяем родительскую связь с защитой wait_lock
   struct proc *temp = p;
   int is_ancestor = 0;
+  
   while(temp != 0) {
+    acquire(&wait_lock);
     if(temp == cur) {
       is_ancestor = 1;
+      release(&wait_lock);
       break;
     }
     temp = temp->parent;
+    release(&wait_lock);
+    
+    if(temp == 0) {
+      break;
+    }
   }
 
   if(!is_ancestor) {
-    release(&p->lock);
     return DUMP2_EPERM; 
   }
 
-
-    int trapframe_idx = register_num + TRAPFRAME_REGS_OFFSET;
+    acquire(&p->lock);
+    
+    // Вычисляем индекс регистра
+    int trapframe_idx = register_num + TRAPFRAME_S2_OFFSET - 2;
+    
+    // получаем значение через смещение в массиве
     uint64 reg_value = ((uint64*)p->trapframe)[trapframe_idx];
+    
+    release(&p->lock);
 
-  release(&p->lock);
-
-  if(copyout(cur->pagetable, (uint64)*return_value, (char*)&reg_value, sizeof(reg_value)) < 0) {
+  // копируем значение в пользовательское пространство
+  if(copyout(cur->pagetable, return_value, (char*)&reg_value, sizeof(reg_value)) < 0) {
     return DUMP2_EFAULT;
   }
-   return DUMP2_OK;
+  
+  return DUMP2_OK;
 }
