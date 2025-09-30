@@ -1,58 +1,74 @@
-#include "kernel/types.h"
-#include "kernel/stat.h"
-#include "user/user.h"
+#include "../kernel/types.h"
+#include "user.h"
+#include "../kernel/param.h"
+#include "../kernel/spinlock.h"
+#include "../kernel/riscv.h"
+#include "../kernel/proc.h"
 
-enum fails {
-    FAIL_PIPE = 1,
-    FAIL_FORK = 2,
-    FAIL_READ = 3,
-    FAIL_WRITE = 4,
-    FAIL_WAIT = 5,
+#define close_pipe(pipe_fd) do { close(pipe_fd[0]); close(pipe_fd[1]); } while(0)
+
+enum error_codes {
+    PIPE_FAILED = 0x1,
+    FORK_FAILED = 0x2,
+    READ_FAILED = 0x3,
+    WRITE_FAILED = 0x4
 };
 
-int main(int argc, char *argv[])
-{
-    int p[2];
-    int pid;
-    char buf[16];
-
-    if (pipe(p) < 0) {
-        fprintf(2, "pipe failed\n");
-        exit(FAIL_PIPE);
+int main() {
+    int pipe_[2];
+    if (pipe(pipe_) == -1) {
+        exit(PIPE_FAILED);
     }
-
-    pid = fork();
-    if (pid < 0) {
-        fprintf(2, "fork failed\n");
-        exit(FAIL_FORK);
+    
+    int pid = fork();
+    if (pid == -1) {
+        close_pipe(pipe_);
+        exit(FORK_FAILED);
     }
-
+    
+    char buf[8];
+    const char *ping = "ping";
+    const char *pong = "pong";
+    int status;
+    
     if (pid == 0) {
-        close(p[1]); 
-
-        if (read(p[0], buf, sizeof(buf)) <= 0) {
-            fprintf(2, "child read failed\n");
-            exit(FAIL_READ);
+        // Дочерний процесс
+        wait(0);
+        int bytes_read = read(pipe_[0], buf, sizeof(buf) - 1);
+        if (bytes_read <= 0) {
+            close_pipe(pipe_);
+            exit(READ_FAILED);
         }
-        printf("%d: got ping\n", getpid());
-
-        close(p[0]); 
-
+        buf[bytes_read] = '\0';
+        printf("<%d>: got <%s>\n", getpid(), buf);
+        
+        int bytes_written = write(pipe_[1], pong, strlen(pong) + 1);
+        if (bytes_written == -1) {
+            close_pipe(pipe_);
+            exit(WRITE_FAILED);
+        }
+        close_pipe(pipe_);
         exit(0);
-    } else { 
-        close(p[0]); 
-
-        if (write(p[1], "ping", 5) != 5) {
-            fprintf(2, "parent write failed\n");
-            exit(FAIL_WRITE);
+    } else {
+        // Родительский процесс
+        int bytes_written = write(pipe_[1], ping, strlen(ping) + 1);
+        if (bytes_written == -1) {
+            close_pipe(pipe_);
+            wait(0);
+            exit(WRITE_FAILED);
         }
-        close(p[1]);
-
-        if (wait(0) < 0) {
-            fprintf(2, "wait failed\n");
-            exit(FAIL_WAIT);
+        
+        wait(0);
+        int bytes_read = read(pipe_[0], buf, sizeof(buf) - 1);
+        if (bytes_read <= 0) {
+            close_pipe(pipe_);
+            wait(0);
+            exit(READ_FAILED);
         }
-        printf("%d: got pong\n", getpid());
-        exit(0);
+        buf[bytes_read] = '\0';
+        printf("<%d>: got <%s>\n", getpid(), buf);
+        close_pipe(pipe_);
+        wait(&status);
+        exit(status);
     }
 }
