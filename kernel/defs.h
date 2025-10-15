@@ -202,4 +202,4 @@ void           bd_init(void*,void*);
 void           bd_free(void*);
 void           *bd_malloc(uint64);
 
-
+int get_pages_stat(uint64, unsigned long);

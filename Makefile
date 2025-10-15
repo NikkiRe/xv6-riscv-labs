@@ -152,6 +152,7 @@ UPROGS=\
 	$U/_usertests\
 	$U/_grind\
 	$U/_wc\
+	$U/_memtest\
 	$U/_zombie\
 	$U/_dumptests\
 	$U/_dump2tests\

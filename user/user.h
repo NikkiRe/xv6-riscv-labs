@@ -41,4 +41,5 @@ void *memcpy(void *, const void *, uint);
 // umalloc.c
 void* malloc(uint);
 void free(void*);
-//hh.ru
+
+int allocstat(int pid, unsigned long ret_addr);

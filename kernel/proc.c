@@ -43,6 +43,21 @@ proc_mapstacks(pagetable_t kpgtbl)
   }
 }
 
+int get_pages_stat(uint64 pid, uint64 ret) {
+  uint64 ret_ret = 0; 
+
+  for(struct proc *p = proc; p < &proc[NPROC]; p++) {
+    if (p->pid == pid) {
+      ret_ret = p->alloc_pages;
+      break;
+    }  
+  }
+
+  struct proc* curp = myproc();
+  return copyout(curp->pagetable, ret, (char*)&ret_ret, sizeof(uint64));
+}
+
+
 // initialize the proc table.
 void
 procinit(void)
