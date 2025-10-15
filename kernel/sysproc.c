@@ -91,3 +91,15 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64 sys_allocstat(void){
+
+  uint64 ret;
+  int pid;
+
+
+  argint(0, &pid);
+  argaddr(2, &ret);
+  
+  return get_pages_stat((uint64)pid, ret);
+}
