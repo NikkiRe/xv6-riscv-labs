@@ -29,27 +29,22 @@ filealloc(void)
 {
   struct file* f;
 
-  acquire(&ftable.lock);
   f = bd_malloc(sizeof(struct file));
   if(!f) {
-    release(&ftable.lock);
     return 0;
   }
   memset(f, 0, sizeof(struct file));
   f->ref = 1;
   f->type = FD_NONE;
-  release(&ftable.lock);
   return f;
 }
 
 struct file*
 filedup(struct file *f)
 {
-  acquire(&ftable.lock);
   if(f->ref < 1)
     panic("filedup");
   f->ref++;
-  release(&ftable.lock);
   return f;
 }
 
@@ -62,11 +57,9 @@ fileclose(struct file *f)
   struct pipe *p = 0;
   int writable = 0;
 
-  acquire(&ftable.lock);
   if(f->ref < 1)
     panic("fileclose");
   if(--f->ref > 0){
-    release(&ftable.lock);
     return;
   }
   /* Save necessary fields before clearing */
@@ -82,7 +75,6 @@ fileclose(struct file *f)
   f->readable = 0;
   f->writable = 0;
 
-  release(&ftable.lock);
 
   if(type == FD_PIPE){
     pipeclose(p, writable);
