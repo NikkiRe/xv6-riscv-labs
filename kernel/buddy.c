@@ -10,7 +10,7 @@
 
 static int nsizes;  // the number of entries in bd_sizes array
 
-#define LEAF_SIZE 32          // The smallest block size
+#define LEAF_SIZE 16          // The smallest block size
 #define MAXSIZE (nsizes - 1)  // Largest index in bd_sizes array
 #define BLK_SIZE(k) ((1L << (k)) * LEAF_SIZE)  // Size of block at size k
 #define HEAP_SIZE BLK_SIZE(MAXSIZE)
@@ -72,20 +72,9 @@ int pair_isset(char *array, int index) {
 
 // Print a bit vector as a list of ranges of 1 bits
 void bd_print_vector(char *vector, int len) {
-  int last, lb;
-
-  last = 1;
-  lb = 0;
-  for (int b = 0; b < len; b++) {
-    if (last == bit_isset(vector, b)) continue;
-//    if (last == 1) printf(" [%d, %d)", lb, b);
-    lb = b;
-    last = bit_isset(vector, b);
-  }
-  if (lb == 0 || last == 1) {
-//    printf(" [%d, %d)", lb, len);
-  }
-//  printf("\n");
+  // Function kept for compatibility but no longer prints anything
+  (void)vector;
+  (void)len;
 }
 
 // Print buddy's data structures
@@ -305,8 +294,9 @@ void bd_init(void *base, void *end) {
   // initialize free list and allocate the alloc array for each size k
   for (int k = 0; k < nsizes; k++) {
     lst_init(&bd_sizes[k].free);
-    sz = sizeof(char) * ROUNDUP(NBLK(k), 8) / 8;
-    sz = sz / 2 > 0 ? sz / 2 : 1;
+    int nblk = NBLK(k);
+    int npair = (nblk + 1) / 2;  // number of pairs (round up)
+    sz = sizeof(char) * ROUNDUP(npair, 8) / 8;
     bd_sizes[k].alloc = p;
     memset(bd_sizes[k].alloc, 0, sz);
     p += sz;

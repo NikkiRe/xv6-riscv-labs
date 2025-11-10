@@ -6,13 +6,14 @@
 #include "proc.h"
 #include "defs.h"
 
-#define MAX_PROCS (0x35)
-
 struct cpu cpus[NCPU];
-struct proc* proc;
+
+// Dynamically allocated array of processes
+// Allocated at boot time using buddy allocator
+struct proc *proc;
 
 struct proc *initproc;
-int asd = 0; //active proc
+
 int nextpid = 1;
 struct spinlock pid_lock;
 
@@ -27,38 +28,28 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
-// Allocate a page for each process's kernel stack.
-// Map it high in memory, followed by an invalid
-// guard page.
-void
-proc_mapstacks(pagetable_t kpgtbl)
-{
-  struct proc *p;
-  
-  for(p = proc; p < &proc[MAX_PROCS]; p++) {
-    char *pa = kalloc();
-    if(pa == 0)
-      panic("kalloc");
-    uint64 va = KSTACK((int) (p - proc));
-    kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-  }
-}
-
 // initialize the proc table.
+// Allocates process array dynamically using buddy allocator.
 void
 procinit(void)
 {
   struct proc *p;
-  
+
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
 
-  proc = bd_malloc(sizeof(struct proc) * MAX_PROCS);
+  // Dynamically allocate process array
+  proc = (struct proc *)bd_malloc(sizeof(struct proc) * NPROC);
+  if(proc == 0)
+    panic("procinit: bd_malloc failed");
 
-  for(p = proc; p < &proc[MAX_PROCS]; p++) {
-      initlock(&p->lock, "proc");
-      p->state = UNUSED;
-      p->kstack = KSTACK((int) (p - proc));
+  // Initialize all process structures
+  for(p = proc; p < &proc[NPROC]; p++) {
+    initlock(&p->lock, "proc");
+    p->state = UNUSED;
+    p->kstack = 0;
+    p->trapframe = 0;
+    p->pagetable = 0;
   }
 }
 
@@ -97,7 +88,7 @@ int
 allocpid()
 {
   int pid;
-  
+
   acquire(&pid_lock);
   pid = nextpid;
   nextpid = nextpid + 1;
@@ -113,10 +104,10 @@ allocpid()
 static struct proc*
 allocproc(void)
 {
-if (asd++ > MAX_PROCS) {asd --; return 0;}
   struct proc *p;
 
-  for(p = proc; p < &proc[MAX_PROCS]; p++) {
+  // Search for an unused process slot
+  for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
       goto found;
@@ -127,19 +118,26 @@ if (asd++ > MAX_PROCS) {asd --; return 0;}
   return 0;
 
 found:
+  // Initialize process structure
   p->pid = allocpid();
   p->state = USED;
 
-  // Allocate a trapframe page.
+  // Allocate kernel stack dynamically
+  if((p->kstack = (uint64)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // Allocate a trapframe page dynamically
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
   }
 
-  // An empty user page table.
-  p->pagetable = proc_pagetable(p);
-  if(p->pagetable == 0){
+  // Create an empty user page table
+  if((p->pagetable = proc_pagetable(p)) == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -160,13 +158,22 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  // Free kernel stack
+  if(p->kstack)
+    kfree((void*)p->kstack);
+  p->kstack = 0;
 
+  // Free trapframe
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  // Free page table
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+
+  // Clear process fields
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -175,7 +182,6 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-  asd --;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -243,7 +249,7 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-  
+
   // allocate one user page and copy initcode's instructions
   // and data into it.
   uvmfirst(p->pagetable, initcode, sizeof(initcode));
@@ -338,13 +344,19 @@ void
 reparent(struct proc *p)
 {
   struct proc *pp;
+  int need_wakeup = 0;
 
-  for(pp = proc; pp < &proc[MAX_PROCS]; pp++){
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    acquire(&pp->lock);
     if(pp->parent == p){
       pp->parent = initproc;
-      wakeup(initproc);
+      need_wakeup = 1;
     }
+    release(&pp->lock);
   }
+  // Wake up init after releasing all locks to avoid deadlock
+  if(need_wakeup)
+    wakeup(initproc);
 }
 
 // Exit the current process.  Does not return.
@@ -379,7 +391,7 @@ exit(int status)
 
   // Parent might be sleeping in wait().
   wakeup(p->parent);
-  
+
   acquire(&p->lock);
 
   p->xstate = status;
@@ -406,11 +418,10 @@ wait(uint64 addr)
   for(;;){
     // Scan through table looking for exited children.
     havekids = 0;
-    for(pp = proc; pp < &proc[MAX_PROCS]; pp++){
+    for(pp = proc; pp < &proc[NPROC]; pp++){
+      acquire(&pp->lock);
       if(pp->parent == p){
         // make sure the child isn't still in exit() or swtch().
-        acquire(&pp->lock);
-
         havekids = 1;
         if(pp->state == ZOMBIE){
           // Found one.
@@ -426,8 +437,8 @@ wait(uint64 addr)
           release(&wait_lock);
           return pid;
         }
-        release(&pp->lock);
       }
+      release(&pp->lock);
     }
 
     // No point waiting if we don't have any children.
@@ -435,7 +446,7 @@ wait(uint64 addr)
       release(&wait_lock);
       return -1;
     }
-    
+
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
@@ -462,7 +473,8 @@ scheduler(void)
     intr_on();
 
     int found = 0;
-    for(p = proc; p < &proc[MAX_PROCS]; p++) {
+    // Scan process array for runnable processes
+    for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
@@ -555,7 +567,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   // Must acquire p->lock in order to
   // change p->state and then call sched.
   // Once we hold p->lock, we can be
@@ -587,14 +599,12 @@ wakeup(void *chan)
 {
   struct proc *p;
 
-  for(p = proc; p < &proc[MAX_PROCS]; p++) {
-    if(p != myproc()){
-      acquire(&p->lock);
-      if(p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
-      }
-      release(&p->lock);
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == SLEEPING && p->chan == chan) {
+      p->state = RUNNABLE;
     }
+    release(&p->lock);
   }
 }
 
@@ -606,7 +616,7 @@ kill(int pid)
 {
   struct proc *p;
 
-  for(p = proc; p < &proc[MAX_PROCS]; p++){
+  for(p = proc; p < &proc[NPROC]; p++){
     acquire(&p->lock);
     if(p->pid == pid){
       p->killed = 1;
@@ -634,7 +644,7 @@ int
 killed(struct proc *p)
 {
   int k;
-  
+
   acquire(&p->lock);
   k = p->killed;
   release(&p->lock);
@@ -689,7 +699,7 @@ procdump(void)
   char *state;
 
   printf("\n");
-  for(p = proc; p < &proc[MAX_PROCS]; p++){
+  for(p = proc; p < &proc[NPROC]; p++){
     if(p->state == UNUSED)
       continue;
     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
