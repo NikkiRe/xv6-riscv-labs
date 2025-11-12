@@ -41,17 +41,17 @@ static inline struct proc **procs_ptr(void) {
   return (struct proc**)procs.data;
 }
 
-static inline size_t *free_ix_ptr(void) {
-  return (size_t*)free_ix.data;
+static inline uint *free_ix_ptr(void) {
+  return (uint*)free_ix.data;
 }
 
-static int free_ix_pop(size_t *out) {
+static int free_ix_pop(uint *out) {
   if (free_ix.size == 0) return -1;
   *out = free_ix_ptr()[--free_ix.size];
   return 0;
 }
 
-static void free_ix_push(size_t i) {
+static void free_ix_push(uint i) {
   push_to_dynamic_array(&free_ix, (const char*)&i);
 }
 
@@ -109,7 +109,7 @@ procinit(void)
   // Reserve space upfront for better performance
   if (create_dynamic_array(&procs, NPROC, sizeof(struct proc*)) != 0)
     panic("procinit: create_dynamic_array procs failed");
-  if (create_dynamic_array(&free_ix, NPROC, sizeof(size_t)) != 0)
+  if (create_dynamic_array(&free_ix, NPROC, sizeof(uint)) != 0)
     panic("procinit: create_dynamic_array free_ix failed");
   
   for (int i = 0; i < NCPU; i++) {
@@ -168,7 +168,7 @@ allocpid()
 
 // Allocate index or append new one
 static int
-alloc_index_or_append(size_t *out)
+alloc_index_or_append(uint *out)
 {
   if (free_ix_pop(out) == 0) return 0;
   *out = procs.size;
@@ -179,7 +179,7 @@ alloc_index_or_append(size_t *out)
 
 // Allocate new process slot at given index
 static struct proc*
-alloc_new_proc_slot_idx(size_t idx)
+alloc_new_proc_slot_idx(uint idx)
 {
   struct proc *p = (struct proc*)bd_malloc(sizeof(struct proc));
   if (!p) return 0;
@@ -201,7 +201,7 @@ static struct proc*
 grab_unused_or_create(void)
 {
   // Try to get index from free list first
-  size_t idx;
+  uint idx;
   if (free_ix_pop(&idx) == 0) {
     struct proc **pp = procs_ptr();
     if (idx < procs.size) {
@@ -227,8 +227,8 @@ grab_unused_or_create(void)
   
   // No free slot found - check NPROC limit before creating new
   struct proc **pp = procs_ptr();
-  size_t active_count = 0;
-  for (size_t i = 0; i < procs.size; i++) {
+  uint active_count = 0;
+  for (uint i = 0; i < procs.size; i++) {
     struct proc *proc = pp[i];
     if (!proc) continue;
     acquire(&proc->lock);
@@ -258,7 +258,7 @@ static void
 mark_index_free(struct proc *p)
 {
   struct proc **pp = procs_ptr();
-  for (size_t i = 0; i < procs.size; i++) {
+  for (uint i = 0; i < procs.size; i++) {
     if (pp[i] == p) {
       free_ix_push(i);
       return;
@@ -692,7 +692,7 @@ void
 wakeup(void *chan)
 {
   struct proc **pp = procs_ptr();
-  for (size_t i = 0; i < procs.size; i++) {
+  for (uint i = 0; i < procs.size; i++) {
     struct proc *p = pp[i];
     if (!p) continue;
     acquire(&p->lock);
@@ -723,7 +723,7 @@ kill(int pid)
   }
   // Fallback: scan all procs if hash miss
   struct proc **pp = procs_ptr();
-  for (size_t i = 0; i < procs.size; i++) {
+  for (uint i = 0; i < procs.size; i++) {
     p = pp[i];
     if (!p) continue;
     acquire(&p->lock);
@@ -797,7 +797,7 @@ procdump(void)
 
   printf("\n");
   struct proc **pp = procs_ptr();
-  for (size_t i = 0; i < procs.size; i++) {
+  for (uint i = 0; i < procs.size; i++) {
     struct proc *p = pp[i];
     if (!p || p->state == UNUSED) continue;
     char *state;

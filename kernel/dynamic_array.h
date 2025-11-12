@@ -3,29 +3,29 @@
 
 #include "types.h"
 
-// Обобщённый динамический массив байтов (как у тебя):
-// data указывает на непрерывный буфер, size — занятых элементов,
-// capacity — вместимость в элементах, struct_size — размер элемента.
+// Generic dynamic array of bytes
+// data points to contiguous buffer, size is number of used elements,
+// capacity is capacity in elements, struct_size is element size.
 struct dynamic_array {
   char   *data;
-  size_t  capacity;
-  size_t  size;
+  uint    capacity;
+  uint    size;
   int     struct_size;
 };
 
-// Инициализация массива (capacity * struct_size байт).
-int create_dynamic_array(struct dynamic_array *arr, size_t capacity, int struct_size);
+// Initialize array (capacity * struct_size bytes).
+int create_dynamic_array(struct dynamic_array *arr, uint capacity, int struct_size);
 
-// Увеличение capacity до nu_capacity (в элементах).
-int extend_dynamic_array(struct dynamic_array *arr, size_t nu_capacity);
+// Extend capacity to nu_capacity (in elements).
+int extend_dynamic_array(struct dynamic_array *arr, uint nu_capacity);
 
-// Добавить элемент (копия struct_size байт по адресу data).
+// Add element (copy struct_size bytes from data).
 int push_to_dynamic_array(struct dynamic_array* arr, const char* data);
 
-// Убрать последний элемент (size--).
+// Remove last element (size--).
 int pop_from_dynamic_array(struct dynamic_array* arr);
 
-// Освободить буфер (без вызова деструктора элементов).
+// Free buffer (without calling element destructors).
 void free_dynamic_array(struct dynamic_array *arr);
 
 #endif // KERNEL_DYNAMIC_ARRAY_H

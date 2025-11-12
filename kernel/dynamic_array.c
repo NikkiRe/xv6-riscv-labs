@@ -3,9 +3,9 @@
 #include "dynamic_array.h"
 #include "defs.h"
 
-// Инициализация массива (capacity * struct_size байт).
+// Initialize array (capacity * struct_size bytes).
 int
-create_dynamic_array(struct dynamic_array *arr, size_t capacity, int struct_size)
+create_dynamic_array(struct dynamic_array *arr, uint capacity, int struct_size)
 {
   if (arr == 0 || capacity == 0 || struct_size <= 0)
     return -1;
@@ -20,9 +20,9 @@ create_dynamic_array(struct dynamic_array *arr, size_t capacity, int struct_size
   return 0;
 }
 
-// Увеличение capacity до nu_capacity (в элементах).
+// Extend capacity to nu_capacity (in elements).
 int
-extend_dynamic_array(struct dynamic_array *arr, size_t nu_capacity)
+extend_dynamic_array(struct dynamic_array *arr, uint nu_capacity)
 {
   if (arr == 0 || nu_capacity <= arr->capacity)
     return -1;
@@ -31,7 +31,7 @@ extend_dynamic_array(struct dynamic_array *arr, size_t nu_capacity)
   if (new_data == 0)
     return -1;
 
-  // Копируем существующие данные
+  // Copy existing data
   if (arr->size > 0 && arr->data != 0) {
     memmove(new_data, arr->data, arr->size * arr->struct_size);
     bd_free(arr->data);
@@ -42,27 +42,27 @@ extend_dynamic_array(struct dynamic_array *arr, size_t nu_capacity)
   return 0;
 }
 
-// Добавить элемент (копия struct_size байт по адресу data).
+// Add element (copy struct_size bytes from data).
 int
 push_to_dynamic_array(struct dynamic_array* arr, const char* data)
 {
   if (arr == 0 || data == 0)
     return -1;
 
-  // Если нужно расширить массив
+  // If need to expand array
   if (arr->size >= arr->capacity) {
-    size_t nu_capacity = arr->capacity == 0 ? 8 : arr->capacity * 2;
+    uint nu_capacity = arr->capacity == 0 ? 8 : arr->capacity * 2;
     if (extend_dynamic_array(arr, nu_capacity) != 0)
       return -1;
   }
 
-  // Копируем элемент в конец массива
+  // Copy element to end of array
   memmove(arr->data + arr->size * arr->struct_size, data, arr->struct_size);
   arr->size++;
   return 0;
 }
 
-// Убрать последний элемент (size--).
+// Remove last element (size--).
 int
 pop_from_dynamic_array(struct dynamic_array* arr)
 {
@@ -73,7 +73,7 @@ pop_from_dynamic_array(struct dynamic_array* arr)
   return 0;
 }
 
-// Освободить буфер (без вызова деструктора элементов).
+// Free buffer (without calling element destructors).
 void
 free_dynamic_array(struct dynamic_array *arr)
 {
