@@ -13,11 +13,16 @@ fetchaddr(uint64 addr, uint64 *ip)
 {
   struct proc *p = myproc();
   
-  // Быстрая проверка переполнения перед проверкой границ
+  // Быстрая проверка переполнения
   if(addr + sizeof(uint64) < addr)
     return -1;
   
-  // Оригинальная проверка границ (обе проверки нужны для защиты от переполнения)
+  // Быстрая проверка MAXVA - адреса >= MAXVA точно невалидны
+  // Это критично для badarg теста с адресом 0xffffffff
+  if(addr >= MAXVA || addr + sizeof(uint64) > MAXVA)
+    return -1;
+  
+  // Проверка границ адресного пространства процесса
   if(addr >= p->sz || addr + sizeof(uint64) > p->sz)
     return -1;
   
@@ -33,14 +38,25 @@ fetchstr(uint64 addr, char *buf, int max)
 {
   struct proc *p = myproc();
   
-  // Быстрая проверка переполнения - безопасная оптимизация
+  // Быстрая проверка переполнения
   if(max > 0 && addr + max < addr)
     return -1;
   
-  // Быстрая проверка границ адресного пространства процесса
+  // Быстрая проверка MAXVA - адреса >= MAXVA точно невалидны
   // Это критично для badarg теста с адресом 0xffffffff
-  if(p->sz > 0 && addr >= p->sz)
+  if(addr >= MAXVA)
     return -1;
+  if(max > 0 && addr + max > MAXVA)
+    return -1;
+  
+  // Быстрая проверка границ адресного пространства процесса
+  // Если p->sz == 0, пропускаем проверку (для ранней инициализации)
+  if(p->sz > 0) {
+    if(addr >= p->sz)
+      return -1;
+    if(max > 0 && addr + max > p->sz)
+      return -1;
+  }
   
   if(copyinstr(p->pagetable, buf, addr, max) < 0)
     return -1;

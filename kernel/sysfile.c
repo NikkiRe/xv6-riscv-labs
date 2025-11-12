@@ -437,8 +437,18 @@ sys_exec(void)
   char path[MAXPATH], *argv[MAXARG];
   int i;
   uint64 uargv, uarg;
+  struct proc *p = myproc();
 
   argaddr(1, &uargv);
+  
+  // Ранняя проверка адреса uargv для badarg теста
+  // Это позволяет быстро отклонить невалидные адреса типа 0xffffffff
+  // до дорогих операций fetchaddr() и fetchstr()
+  if(uargv >= MAXVA)
+    return -1;
+  if(p->sz > 0 && uargv >= p->sz)
+    return -1;
+  
   if(argstr(0, path, MAXPATH) < 0) {
     return -1;
   }
@@ -447,7 +457,12 @@ sys_exec(void)
     if(i >= NELEM(argv)){
       goto bad;
     }
-    if(fetchaddr(uargv+sizeof(uint64)*i, (uint64*)&uarg) < 0){
+    // Быстрая проверка адреса перед fetchaddr()
+    uint64 uarg_addr = uargv + sizeof(uint64)*i;
+    if(uarg_addr >= MAXVA || (p->sz > 0 && uarg_addr >= p->sz))
+      goto bad;
+    
+    if(fetchaddr(uarg_addr, (uint64*)&uarg) < 0){
       goto bad;
     }
     if(uarg == 0){

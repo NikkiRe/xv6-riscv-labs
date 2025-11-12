@@ -10,10 +10,10 @@ struct cpu cpus[NCPU];
 
 struct proc *initproc;
 
-// Голова двусвязного кольцевого списка процессов.
+// Head of doubly-linked circular list of processes.
 struct proc proc_table;
 
-// Счётчик активных дескрипторов процессов (для лимита NPROC).
+// Counter of active process descriptors (for NPROC limit).
 static struct {
   struct spinlock lock;
   int count;
@@ -53,7 +53,7 @@ extern void forkret(void);
 static void freeproc(struct proc *p);
 extern char trampoline[]; // trampoline.S
 
-// Глобальная блокировка списка процессов.
+// Global lock for process list.
 struct spinlock proc_table_lock;
 
 void
@@ -72,7 +72,7 @@ procinit(void)
   proc_table_init(&proc_table);
 }
 
-// Должна вызываться с выключенными прерываниями.
+// Must be called with interrupts disabled.
 int
 cpuid()
 {
@@ -80,8 +80,8 @@ cpuid()
   return id;
 }
 
-// Возвращает указатель на cpu текущего ядра.
-// Прерывания должны быть выключены.
+// Return pointer to current CPU.
+// Interrupts must be disabled.
 struct cpu*
 mycpu(void)
 {
@@ -90,7 +90,7 @@ mycpu(void)
   return c;
 }
 
-// Возвращает текущий proc* или 0.
+// Return current proc* or 0.
 struct proc*
 myproc(void)
 {
@@ -112,7 +112,7 @@ allocpid(void)
   return pid;
 }
 
-// Выделить и частично инициализировать новый дескриптор процесса.
+// Allocate and partially initialize new process descriptor.
 static struct proc*
 allocproc(void)
 {
@@ -133,7 +133,7 @@ allocproc(void)
   }
 
   memset(p, 0, sizeof(struct proc));
-  initlock(&p->lock, "proc"); // для совместимости с проверками holding()
+  initlock(&p->lock, "proc"); // for compatibility with holding() checks
   p->pid = allocpid();
   p->state = USED;
 
@@ -156,7 +156,7 @@ allocproc(void)
     return 0;
   }
 
-  // Начальный контекст: возврат в forkret, SP на верх kstack.
+  // Initial context: return to forkret, SP at top of kstack.
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
@@ -164,18 +164,18 @@ allocproc(void)
   return p;
 }
 
-// Освободить все ресурсы процесса и сам дескриптор.
-// ВАЖНО: может вызываться как ПОД локом proc_table_lock, так и БЕЗ него.
-// Поэтому удаление из списка делаем так, чтобы не ловить реэнтрантный acquire().
+// Free all process resources and the descriptor itself.
+// NOTE: may be called with or without proc_table_lock held.
+// List removal is done to avoid reentrant acquire().
 static void
 freeproc(struct proc *p)
 {
-  // Если процесс уже вставлен в список — снять, соблюдая состояние лока.
+  // If process is in list, remove it while respecting lock state.
   if (p->next && p->last) {
     int have = holding(&proc_table_lock);
     if (!have)
       acquire(&proc_table_lock);
-    // Повторная проверка под локом: вдруг гонка.
+    // Re-check under lock: race condition possible.
     if (p->next && p->last)
       proc_table_remove(p);
     if (!have)
@@ -214,7 +214,7 @@ freeproc(struct proc *p)
   release(&proccnt.lock);
 }
 
-// Создать пустую user pagetable с TRAMPOLINE/TRAPFRAME.
+// Create empty user pagetable with TRAMPOLINE/TRAPFRAME.
 pagetable_t
 proc_pagetable(struct proc *p)
 {
@@ -240,7 +240,7 @@ proc_pagetable(struct proc *p)
   return pagetable;
 }
 
-// Освободить user pagetable и память процесса.
+// Free user pagetable and process memory.
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
@@ -249,7 +249,7 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
-// initcode.S (как в xv6)
+// initcode.S (as in xv6)
 uchar initcode[] = {
   0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02,
   0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35, 0x02,
@@ -260,7 +260,7 @@ uchar initcode[] = {
   0x00, 0x00, 0x00, 0x00
 };
 
-// Первый процесс.
+// First process.
 void
 userinit(void)
 {
@@ -272,11 +272,11 @@ userinit(void)
 
   initproc = p;
 
-  // Один пользовательский лист и копия initcode.
+  // One user page and copy of initcode.
   uvmfirst(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
-  // Готовим "возврат" в юзер.
+  // Prepare "return" to user.
   p->trapframe->epc = 0;
   p->trapframe->sp = PGSIZE;
 
@@ -289,7 +289,7 @@ userinit(void)
   release(&proc_table_lock);
 }
 
-// Расширить/сжать память процесса на n байт.
+// Grow or shrink process memory by n bytes.
 int
 growproc(int n)
 {
@@ -308,7 +308,7 @@ growproc(int n)
   return 0;
 }
 
-// Создать дочерний процесс (копия родителя).
+// Create child process (copy of parent).
 int
 fork(void)
 {
@@ -320,19 +320,19 @@ fork(void)
     return -1;
   }
 
-  // Копия памяти пользователя.
+  // Copy user memory.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     return -1;
   }
   np->sz = p->sz;
 
-  // Копия регистров.
+  // Copy registers.
   *(np->trapframe) = *(p->trapframe);
-  // В ребёнке fork() возвращает 0.
+  // In child, fork() returns 0.
   np->trapframe->a0 = 0;
 
-  // Дублируем открытые файлы.
+  // Duplicate open files.
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
@@ -351,7 +351,7 @@ fork(void)
   return pid;
 }
 
-// wakeup под удержанием proc_table_lock.
+// Wakeup while holding proc_table_lock.
 void
 wakeup_holding_proc_table_lock(void* chan)
 {
@@ -363,7 +363,7 @@ wakeup_holding_proc_table_lock(void* chan)
   }
 }
 
-// Передать осиротевших детей init'у. Должен держать proc_table_lock.
+// Give orphaned children to init. Must hold proc_table_lock.
 void
 reparent(struct proc *p)
 {
@@ -375,7 +375,7 @@ reparent(struct proc *p)
   }
 }
 
-// Завершить текущий процесс.
+// Exit current process.
 void
 exit(int status)
 {
@@ -384,7 +384,7 @@ exit(int status)
   if (p == initproc)
     panic("init exiting");
 
-  // Закрыть файлы.
+  // Close files.
   for (int fd = 0; fd < NOFILE; fd++) {
     if (p->ofile[fd]) {
       struct file *f = p->ofile[fd];
@@ -400,19 +400,19 @@ exit(int status)
 
   acquire(&proc_table_lock);
 
-  // Передать детей init'у, разбудить родителя.
+  // Give children to init, wake up parent.
   reparent(p);
   wakeup_holding_proc_table_lock(p->parent);
 
   p->xstate = status;
   p->state = ZOMBIE;
 
-  // Переход в планировщик, не возвращаемся.
+  // Switch to scheduler, never return.
   sched();
   panic("zombie exit");
 }
 
-// Ждать завершения ребёнка, вернуть pid, либо -1.
+// Wait for child to exit, return pid, or -1.
 int
 wait(uint64 addr)
 {
@@ -434,7 +434,7 @@ wait(uint64 addr)
             release(&proc_table_lock);
             return -1;
           }
-          // freeproc() сам снимет из списка (без повторного acquire)
+          // freeproc() will remove from list (without re-acquire)
           freeproc(pp);
           release(&proc_table_lock);
           return pid;
@@ -447,13 +447,13 @@ wait(uint64 addr)
       return -1;
     }
 
-    // Спим, пока кто-то из детей не завершится.
+    // Sleep until one of children exits.
     sleep(p, &proc_table_lock);
   }
 }
 
-// Планировщик: выбирает RUNNABLE и переключается.
-// Если никого нет — уходим в wfi до прерывания.
+// Scheduler: pick RUNNABLE process and switch to it.
+// If none found, go to wfi until interrupt.
 void
 scheduler(void)
 {
@@ -465,16 +465,22 @@ scheduler(void)
     intr_on();
 
     acquire(&proc_table_lock);
+    p = 0;
     int found = 0;
+    // Stop at first RUNNABLE process for optimization
     for (struct proc *it = proc_table.next; it != &proc_table; it = it->next) {
-      p = it;
-      if (p->state == RUNNABLE) {
+      if (it->state == RUNNABLE) {
+        p = it;
         found = 1;
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-        c->proc = 0;
+        break;
       }
+    }
+    
+    if (found) {
+      p->state = RUNNING;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+      c->proc = 0;
     }
     release(&proc_table_lock);
 
@@ -485,8 +491,8 @@ scheduler(void)
   }
 }
 
-// Переключение в планировщик. Должен держать только proc_table_lock,
-// и состояние процесса уже изменено (не RUNNING).
+// Switch to scheduler. Must hold only proc_table_lock,
+// and process state already changed (not RUNNING).
 void
 sched(void)
 {
@@ -507,7 +513,7 @@ sched(void)
   mycpu()->intena = intena;
 }
 
-// Отдать CPU на один раунд планирования.
+// Give up CPU for one scheduling round.
 void
 yield(void)
 {
@@ -518,13 +524,13 @@ yield(void)
   release(&proc_table_lock);
 }
 
-// Первый запуск ребёнка после fork() попадает сюда.
+// First run of child after fork() comes here.
 void
 forkret(void)
 {
   static int first = 1;
 
-  // Вошли из scheduler() под proc_table_lock — освободим.
+  // Entered from scheduler() under proc_table_lock — release it.
   release(&proc_table_lock);
 
   if (first) {
@@ -536,8 +542,8 @@ forkret(void)
   usertrapret();
 }
 
-// Атомарно отпустить lock и заснуть на chan.
-// По пробуждении снова захватить исходный lock.
+// Atomically release lock and sleep on chan.
+// Reacquire original lock when awakened.
 void
 sleep(void *chan, struct spinlock *lk)
 {
@@ -548,14 +554,14 @@ sleep(void *chan, struct spinlock *lk)
     release(lk);
   }
 
-  // Засыпаем.
+  // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
 
-  // Переключаемся в планировщик. Держим proc_table_lock.
+  // Switch to scheduler. Hold proc_table_lock.
   sched();
 
-  // Проснулись — подчистить.
+  // Awakened — clean up.
   p->chan = 0;
 
   if(lk != &proc_table_lock) {
@@ -564,7 +570,7 @@ sleep(void *chan, struct spinlock *lk)
   }
 }
 
-// Разбудить все процессы, спящие на chan.
+// Wake up all processes sleeping on chan.
 void
 wakeup(void *chan)
 {
@@ -573,7 +579,7 @@ wakeup(void *chan)
   release(&proc_table_lock);
 }
 
-// Убить процесс по pid.
+// Kill process by pid.
 int
 kill(int pid)
 {
@@ -604,9 +610,9 @@ killed(struct proc *p)
   return __atomic_load_n(&p->killed, __ATOMIC_ACQUIRE);
 }
 
-// Быстрая проверка адресов пользовательского пространства по p->sz и MAXVA.
-// Это моментально отбраковывает явно невалидные указатели (например, 0xffffffff),
-// без дорогих проходов по таблицам страниц.
+// Fast check of user space addresses against p->sz and MAXVA.
+// Instantly rejects obviously invalid pointers (e.g., 0xffffffff),
+// without expensive page table walks.
 static inline int
 uaddr_in_range(struct proc *p, uint64 uva, uint64 len)
 {
@@ -628,7 +634,7 @@ uaddr_in_range(struct proc *p, uint64 uva, uint64 len)
   return 1;
 }
 
-// Копирование либо в user, либо в kernel адрес.
+// Copy to either user or kernel address.
 int
 either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
@@ -643,7 +649,7 @@ either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
   }
 }
 
-// Копирование либо из user, либо из kernel адреса.
+// Copy from either user or kernel address.
 int
 either_copyin(void *dst, int user_src, uint64 src, uint64 len)
 {
@@ -658,7 +664,7 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
   }
 }
 
-// Отладочная печать процессов.
+// Debug print of processes.
 void
 procdump(void)
 {
