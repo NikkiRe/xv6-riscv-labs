@@ -94,6 +94,8 @@ struct proc {
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
+  struct proc *child_head;     // List of children
+  struct proc *sibling_next;   // Next sibling in parent's child list
 
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
@@ -105,7 +107,7 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];              // Process name (debugging)
   
-  struct proc *last;
-  struct proc *next;
+  // Run queue link (intrusive list)
+  struct proc *rq_next;        // Next in run queue
 
 };
