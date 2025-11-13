@@ -31,6 +31,7 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 struct spinlock wait_lock;
+struct spinlock procs_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -53,6 +54,52 @@ static int free_ix_pop(uint *out) {
 
 static void free_ix_push(uint i) {
   push_to_dynamic_array(&free_ix, (const char*)&i);
+}
+
+// Remove from free_ix all indices >= new_size (they are beyond array end).
+// Must be called with procs_lock held.
+static void
+free_ix_trim_to_size(uint new_size)
+{
+  if (free_ix.data == 0) return;
+
+  if (free_ix.size > 0) {
+    uint *ix = free_ix_ptr();
+    uint w = 0;
+    for (uint r = 0; r < free_ix.size; r++) {
+      if (ix[r] < new_size) {
+        ix[w++] = ix[r];
+      }
+    }
+    free_ix.size = w;
+  }
+
+  // ВАЖНО: реально вернуть хвост capacity -> size
+  (void)shrink_to_fit_dynamic_array(&free_ix);
+}
+
+// Shrink logical size of procs to last non-zero element.
+// Must be called with procs_lock held.
+static void
+procs_trim_tail(void)
+{
+  if (procs.size == 0 || procs.data == 0) return;
+  struct proc **pp = procs_ptr();
+
+  long last = (long)procs.size - 1;
+  while (last >= 0 && pp[last] == 0)
+    last--;
+
+  uint new_size = (last < 0) ? 0 : (uint)(last + 1);
+  if (new_size < procs.size) {
+    procs.size = new_size;
+
+    // 1) отфильтровать free_ix по новому логическому размеру
+    free_ix_trim_to_size(new_size);
+
+    // 2) реально отдать страницы из буфера procs
+    (void)shrink_to_fit_dynamic_array(&procs);
+  }
 }
 
 static inline unsigned phash(int pid) {
@@ -105,11 +152,12 @@ procinit(void)
 {
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+  initlock(&procs_lock, "procs");
 
   // Reserve space upfront for better performance
-  if (create_dynamic_array(&procs, NPROC, sizeof(struct proc*)) != 0)
+  if (create_dynamic_array(&procs, 0, sizeof(struct proc*)) != 0)
     panic("procinit: create_dynamic_array procs failed");
-  if (create_dynamic_array(&free_ix, NPROC, sizeof(uint)) != 0)
+  if (create_dynamic_array(&free_ix, 0, sizeof(uint)) != 0)
     panic("procinit: create_dynamic_array free_ix failed");
   
   for (int i = 0; i < NCPU; i++) {
@@ -167,6 +215,7 @@ allocpid()
 }
 
 // Allocate index or append new one
+// Must be called with procs_lock held.
 static int
 alloc_index_or_append(uint *out)
 {
@@ -178,6 +227,7 @@ alloc_index_or_append(uint *out)
 }
 
 // Allocate new process slot at given index
+// Must be called with procs_lock held.
 static struct proc*
 alloc_new_proc_slot_idx(uint idx)
 {
@@ -200,27 +250,32 @@ alloc_new_proc_slot_idx(uint idx)
 static struct proc*
 grab_unused_or_create(void)
 {
+  acquire(&procs_lock);
+  
   // Try to get index from free list first
   uint idx;
   if (free_ix_pop(&idx) == 0) {
     struct proc **pp = procs_ptr();
     if (idx < procs.size) {
       struct proc *p = pp[idx];
-      if (p) {
-        acquire(&p->lock);
-        if (p->state == UNUSED) {
-          return p; // lock held, as in original xv6 allocproc()
+      if (p == 0) {
+        // Slot is empty (was freed), can allocate new proc here
+        struct proc *newp = alloc_new_proc_slot_idx(idx);
+        release(&procs_lock);
+        if (newp) {
+          acquire(&newp->lock);
+          newp->state = UNUSED;
+          return newp;
         }
-        release(&p->lock);
-      } else {
-        // Slot is empty, can allocate new proc here
-        struct proc *p = alloc_new_proc_slot_idx(idx);
-        if (p) {
-          acquire(&p->lock);
-          p->state = UNUSED;
-          return p;
-        }
+        return 0;
       }
+      // Process exists - check if it's UNUSED
+      acquire(&p->lock);
+      if (p->state == UNUSED) {
+        release(&procs_lock);
+        return p; // lock held, as in original xv6 allocproc()
+      }
+      release(&p->lock);
     }
     // Invalid or non-UNUSED, continue to check limit
   }
@@ -237,17 +292,23 @@ grab_unused_or_create(void)
   }
   
   if (active_count >= NPROC) {
+    release(&procs_lock);
     return 0;
   }
   
   // Allocate new index
-  if (alloc_index_or_append(&idx) != 0) return 0;
+  if (alloc_index_or_append(&idx) != 0) {
+    release(&procs_lock);
+    return 0;
+  }
   
   struct proc *p = alloc_new_proc_slot_idx(idx);
   if (!p) {
     free_ix_push(idx);
+    release(&procs_lock);
     return 0;
   }
+  release(&procs_lock);
   acquire(&p->lock);
   p->state = UNUSED;
   return p;
@@ -258,15 +319,19 @@ grab_unused_or_create(void)
 static void
 free_proc_object_and_clear_slot(struct proc *p)
 {
+  acquire(&procs_lock);
   struct proc **pp = procs_ptr();
   for (uint i = 0; i < procs.size; i++) {
     if (pp[i] == p) {
       pp[i] = 0;
       free_ix_push(i);
       bd_free(p);
+      procs_trim_tail();
+      release(&procs_lock);
       return;
     }
   }
+  release(&procs_lock);
   bd_free(p);
 }
 
@@ -702,9 +767,18 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
-  struct proc **pp = procs_ptr();
-  for (uint i = 0; i < procs.size; i++) {
-    struct proc *p = pp[i];
+  acquire(&procs_lock);
+  uint sz = procs.size;
+  release(&procs_lock);
+  
+  for (uint i = 0; i < sz; i++) {
+    acquire(&procs_lock);
+    if (i >= procs.size) {
+      release(&procs_lock);
+      break;
+    }
+    struct proc *p = procs_ptr()[i];
+    release(&procs_lock);
     if (!p) continue;
     acquire(&p->lock);
     if(p->state == SLEEPING && p->chan == chan) {
@@ -733,9 +807,18 @@ kill(int pid)
     release(&p->lock);
   }
   // Fallback: scan all procs if hash miss
-  struct proc **pp = procs_ptr();
-  for (uint i = 0; i < procs.size; i++) {
-    p = pp[i];
+  acquire(&procs_lock);
+  uint sz = procs.size;
+  release(&procs_lock);
+  
+  for (uint i = 0; i < sz; i++) {
+    acquire(&procs_lock);
+    if (i >= procs.size) {
+      release(&procs_lock);
+      break;
+    }
+    p = procs_ptr()[i];
+    release(&procs_lock);
     if (!p) continue;
     acquire(&p->lock);
     if(p->pid == pid){
@@ -807,9 +890,18 @@ procdump(void)
   };
 
   printf("\n");
-  struct proc **pp = procs_ptr();
-  for (uint i = 0; i < procs.size; i++) {
-    struct proc *p = pp[i];
+  acquire(&procs_lock);
+  uint sz = procs.size;
+  release(&procs_lock);
+  
+  for (uint i = 0; i < sz; i++) {
+    acquire(&procs_lock);
+    if (i >= procs.size) {
+      release(&procs_lock);
+      break;
+    }
+    struct proc *p = procs_ptr()[i];
+    release(&procs_lock);
     if (!p || p->state == UNUSED) continue;
     char *state;
     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
