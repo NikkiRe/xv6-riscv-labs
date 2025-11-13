@@ -253,17 +253,21 @@ grab_unused_or_create(void)
   return p;
 }
 
-// Mark index as free when process becomes UNUSED
+// WARNING: must be called when p->lock is released
+// and process is no longer used by any kernel structures.
 static void
-mark_index_free(struct proc *p)
+free_proc_object_and_clear_slot(struct proc *p)
 {
   struct proc **pp = procs_ptr();
   for (uint i = 0; i < procs.size; i++) {
     if (pp[i] == p) {
+      pp[i] = 0;
       free_ix_push(i);
+      bd_free(p);
       return;
     }
   }
+  bd_free(p);
 }
 
 // Look for an UNUSED proc and prepare it.
@@ -283,6 +287,7 @@ allocproc(void)
     pid_del(p);
     freeproc(p);
     release(&p->lock);
+    free_proc_object_and_clear_slot(p);
     return 0;
   }
 
@@ -291,6 +296,7 @@ allocproc(void)
     pid_del(p);
     freeproc(p);
     release(&p->lock);
+    free_proc_object_and_clear_slot(p);
     return 0;
   }
 
@@ -299,6 +305,7 @@ allocproc(void)
     pid_del(p);
     freeproc(p);
     release(&p->lock);
+    free_proc_object_and_clear_slot(p);
     return 0;
   }
 
@@ -310,22 +317,24 @@ allocproc(void)
   return p;
 }
 
-// free a proc structure and the data hanging from it (but keep struct proc for reuse).
-// p->lock must be held.
+// p->lock MUST be held on entry.
+// Frees all process resources and sets state to UNUSED,
+// but does NOT free the struct proc object itself.
 static void
 freeproc(struct proc *p)
 {
-  if(p->kstack)
+  if(p->kstack){
     kfree((void*)p->kstack);
-  p->kstack = 0;
-
-  if(p->trapframe)
+    p->kstack = 0;
+  }
+  if(p->trapframe){
     kfree((void*)p->trapframe);
-  p->trapframe = 0;
-
-  if(p->pagetable)
+    p->trapframe = 0;
+  }
+  if(p->pagetable){
     proc_freepagetable(p->pagetable, p->sz);
-  p->pagetable = 0;
+    p->pagetable = 0;
+  }
 
   p->sz = 0;
   p->pid = 0;
@@ -445,6 +454,7 @@ fork(void)
     pid_del(np);
     freeproc(np);
     release(&np->lock);
+    free_proc_object_and_clear_slot(np);
     return -1;
   }
   np->sz = p->sz;
@@ -573,8 +583,9 @@ wait(uint64 addr)
           }
           pid_del(ch);
           freeproc(ch);
-          mark_index_free(ch);
           release(&ch->lock);
+          free_proc_object_and_clear_slot(ch);
+
           release(&wait_lock);
           return pid;
         }

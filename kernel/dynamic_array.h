@@ -19,6 +19,13 @@ int create_dynamic_array(struct dynamic_array *arr, uint capacity, int struct_si
 // Extend capacity to nu_capacity (in elements).
 int extend_dynamic_array(struct dynamic_array *arr, uint nu_capacity);
 
+// Shrink capacity (in elements) down to at least arr->size.
+// If new_capacity == arr->size it's "shrink_to_fit".
+int shrink_dynamic_array(struct dynamic_array *arr, uint new_capacity);
+
+// Convenience: shrink strictly to size (release slack pages if possible).
+int shrink_to_fit_dynamic_array(struct dynamic_array *arr);
+
 // Add element (copy struct_size bytes from data).
 int push_to_dynamic_array(struct dynamic_array* arr, const char* data);
 
