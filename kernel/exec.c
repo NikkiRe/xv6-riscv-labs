@@ -74,18 +74,19 @@ exec(char *path, char **argv)
 
   p = myproc();
   uint64 oldsz = p->sz;
+  uint64 oldstack = p->stack_end;
 
-  // Allocate some pages at the next page boundary.
+  // Allocate two pages at the next page boundary.
   // Make the first inaccessible as a stack guard.
-  // Use the rest as the user stack.
+  // Use the second as the user stack.
   sz = PGROUNDUP(sz);
   uint64 sz1;
-  if((sz1 = uvmalloc(pagetable, sz, sz + (USERSTACK+1)*PGSIZE, PTE_W)) == 0)
+  if((sz1 = uvmalloc(pagetable, sz, sz + 2*PGSIZE, PTE_W)) == 0)
     goto bad;
   sz = sz1;
-  uvmclear(pagetable, sz-(USERSTACK+1)*PGSIZE);
+  uvmclear(pagetable, sz-2*PGSIZE);
   sp = sz;
-  stackbase = sp - USERSTACK*PGSIZE;
+  stackbase = sp - PGSIZE;
 
   // Push argument strings, prepare rest of stack in ustack.
   for(argc = 0; argv[argc]; argc++) {
@@ -126,13 +127,17 @@ exec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
-  proc_freepagetable(oldpagetable, oldsz);
+  proc_freepagetable(oldpagetable, oldsz, oldstack);
+
+  // if (p->pid == 1) {
+  //   vmprint(p->pagetable);
+  // }
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:
   if(pagetable)
-    proc_freepagetable(pagetable, sz);
+    proc_freepagetable(pagetable, sz, 0);
   if(ip){
     iunlockput(ip);
     end_op();

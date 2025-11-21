@@ -98,6 +98,7 @@ struct proc {
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
+  uint64 stack_end;            // Top of user stack (just below TRAPFRAME)
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process
@@ -105,3 +106,20 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };
+
+static inline uint64
+proc_stack_base(uint64 stack_end)
+{
+  if(stack_end == 0 || stack_end < USERSTACK * PGSIZE)
+    return 0;
+  return stack_end - USERSTACK * PGSIZE;
+}
+
+static inline uint64
+proc_stack_guard(uint64 stack_end)
+{
+  uint64 base = proc_stack_base(stack_end);
+  if(base == 0)
+    return 0;
+  return base - PGSIZE;
+}

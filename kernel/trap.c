@@ -50,7 +50,9 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
+  uint64 scause = r_scause();
+
+  if(scause == 8){
     // system call
 
     if(killed(p))
@@ -65,12 +67,43 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(scause == 13 || scause == 15){
+    // Page fault - optimized for fast rejection of invalid addresses
+    uint64 fault_va = r_stval();
+    int handled = 0;
+    
+    // Check valid address ranges
+    if(fault_va < KERNBASE) {
+      // Get PTE for valid address
+      pte_t *pte = walk(p->pagetable, fault_va, 0);
+      
+      // Write fault on COW page (only for heap)
+      if(scause == 15 && pte && (*pte & PTE_V) && (*pte & PTE_COW)) {
+        if(cowhandler(p->pagetable, fault_va) == 0) {
+          handled = 1;
+        }
+      }
+      // Unmapped page in heap - lazy allocation
+      else if(fault_va < p->sz && (pte == 0 || (*pte & PTE_V) == 0)) {
+        if(lazyhandler(p->pagetable, fault_va, p->sz) == 0) {
+          handled = 1;
+        }
+      }
+    }
+
+    if(!handled) {
+      if(scause != 15 || fault_va >= MAXVA) {
+        printf("usertrap(): unexpected scause 0x%lx pid=%d\n", scause, p->pid);
+        printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), fault_va);
+      }
+      p->killed = 1;
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
+    printf("usertrap(): unexpected scause 0x%lx pid=%d\n", scause, p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
-    setkilled(p);
+    p->killed = 1;
   }
 
   if(killed(p))
@@ -145,13 +178,13 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
-    // interrupt or trap from an unknown source
-    printf("scause=0x%lx sepc=0x%lx stval=0x%lx\n", scause, r_sepc(), r_stval());
+    printf("scause 0x%lx\n", scause);
+    printf("sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
+  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
     yield();
 
   // the yield() may have caused some traps to occur,
@@ -215,4 +248,3 @@ devintr()
     return 0;
   }
 }
-

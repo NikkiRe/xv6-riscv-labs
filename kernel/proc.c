@@ -146,6 +146,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->sz = 0;
+  p->stack_end = 0;
+
   return p;
 }
 
@@ -159,9 +162,10 @@ freeproc(struct proc *p)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
   if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
+    proc_freepagetable(p->pagetable, p->sz, p->stack_end);
   p->pagetable = 0;
   p->sz = 0;
+  p->stack_end = 0;
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
@@ -208,8 +212,11 @@ proc_pagetable(struct proc *p)
 // Free a process's page table, and free the
 // physical memory it refers to.
 void
-proc_freepagetable(pagetable_t pagetable, uint64 sz)
+proc_freepagetable(pagetable_t pagetable, uint64 sz, uint64 stack_end)
 {
+  uint64 stack_base = proc_stack_base(stack_end);
+  if(stack_base)
+    uvmunmap(pagetable, stack_base, USERSTACK, 1);
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
@@ -241,10 +248,12 @@ userinit(void)
   // and data into it.
   uvmfirst(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  if(uvmallocstack(p->pagetable, &p->stack_end) < 0)
+    panic("userinit: stack");
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
-  p->trapframe->sp = PGSIZE;  // user stack pointer
+  p->trapframe->sp = p->stack_end;  // user stack pointer
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
@@ -259,18 +268,21 @@ userinit(void)
 int
 growproc(int n)
 {
-  uint64 sz;
   struct proc *p = myproc();
+  uint64 sz = p->sz;
 
-  sz = p->sz;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+    uint64 guard = proc_stack_guard(p->stack_end);
+    if(guard != 0 && sz + (uint64)n > guard)
       return -1;
-    }
+    if(sz + (uint64)n > MAXVA)
+      return -1;
+    p->sz = sz + n;
   } else if(n < 0){
-    sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uint64 dec = (uint64)(-n);
+    uint64 new_sz = dec > sz ? 0 : sz - dec;
+    p->sz = uvmdealloc(p->pagetable, sz, new_sz);
   }
-  p->sz = sz;
   return 0;
 }
 
@@ -295,6 +307,7 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->stack_end = p->stack_end;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -406,17 +419,13 @@ wait(uint64 addr)
 
         havekids = 1;
         if(pp->state == ZOMBIE){
-          // Found one.
           pid = pp->pid;
-          if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate,
-                                  sizeof(pp->xstate)) < 0) {
-            release(&pp->lock);
-            release(&wait_lock);
-            return -1;
-          }
+          int xstate = pp->xstate;
           freeproc(pp);
           release(&pp->lock);
           release(&wait_lock);
+          if(addr != 0)
+            copyout(p->pagetable, addr, (char *)&xstate, sizeof(xstate));
           return pid;
         }
         release(&pp->lock);

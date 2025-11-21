@@ -43,8 +43,13 @@ sys_sbrk(void)
 
   argint(0, &n);
   addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+  
+  if (n > 0) {
+    myproc()->sz += n;
+  } else {
+    myproc()->sz = uvmdealloc(myproc()->pagetable, addr, addr + n);
+  }
+
   return addr;
 }
 
@@ -55,8 +60,6 @@ sys_sleep(void)
   uint ticks0;
 
   argint(0, &n);
-  if(n < 0)
-    n = 0;
   acquire(&tickslock);
   ticks0 = ticks;
   while(ticks - ticks0 < n){
