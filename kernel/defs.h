@@ -182,11 +182,6 @@ int             copyinstr(pagetable_t, char *, uint64, uint64);
 void            vmprint(pagetable_t);
 int             cowhandler(pagetable_t, uint64);
 int             lazyhandler(pagetable_t, uint64, uint64);
-int             check_va(struct proc*, uint64);
-int             is_cow(pagetable_t, uint64);
-int             cow_copy(pagetable_t, uint64);
-int             lazy_alloc(pagetable_t, uint64);
-
 // plic.c
 void            plicinit(void);
 void            plicinithart(void);
