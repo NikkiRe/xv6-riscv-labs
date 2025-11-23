@@ -159,6 +159,7 @@ UPROGS=\
 	$U/_alloctest\
 	$U/_cowtest\
 	$U/_lazytests\
+	$U/_mlfqtest\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

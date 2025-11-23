@@ -14,13 +14,14 @@ static struct dynamic_array procs;
 // Free list of indices for UNUSED procs
 static struct dynamic_array free_ix;
 
-// Per-CPU run queues
+// MLFQ run queues: NMLFQ levels, each level has NCPU queues
 struct runq {
   struct proc *head;
   struct proc *tail;
   struct spinlock lock;
 };
-static struct runq rq[NCPU];
+static struct runq mlfq[NMLFQ][NCPU];
+static uint mlfq_boost_ticks = 0;
 
 // PID hash table for fast lookup
 #define PIDH 256
@@ -135,15 +136,14 @@ static inline struct proc* rq_pop(struct runq *q) {
   return p;
 }
 
-static inline int pickcpu(void) {
-  return cpuid() % NCPU;
-}
-
 static void make_runnable(struct proc *p) {
-  int c = pickcpu();
-  acquire(&rq[c].lock);
-  rq_push(&rq[c], p);
-  release(&rq[c].lock);
+  int c = cpuid();
+  int level = p->priority;
+  if (level < 0) level = 0;
+  if (level >= NMLFQ) level = NMLFQ - 1;
+  acquire(&mlfq[level][c].lock);
+  rq_push(&mlfq[level][c], p);
+  release(&mlfq[level][c].lock);
 }
 
 // initialize the proc table to dynamic array of pointers.
@@ -160,10 +160,12 @@ procinit(void)
   if (create_dynamic_array(&free_ix, 0, sizeof(uint)) != 0)
     panic("procinit: create_dynamic_array free_ix failed");
   
-  for (int i = 0; i < NCPU; i++) {
-    initlock(&rq[i].lock, "runq");
-    rq[i].head = 0;
-    rq[i].tail = 0;
+  for (int level = 0; level < NMLFQ; level++) {
+    for (int i = 0; i < NCPU; i++) {
+      initlock(&mlfq[level][i].lock, "mlfq");
+      mlfq[level][i].head = 0;
+      mlfq[level][i].tail = 0;
+    }
   }
   
   for (int i = 0; i < PIDH; i++) {
@@ -345,6 +347,8 @@ allocproc(void)
   // Initialize process structure
   p->pid = allocpid();
   p->state = USED;
+  p->priority = 0;
+  p->ticks_in_queue = 0;
   pid_add(p);
 
   // Allocate kernel stack dynamically
@@ -411,6 +415,8 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->priority = 0;
+  p->ticks_in_queue = 0;
   p->state = UNUSED;
 }
 
@@ -666,7 +672,35 @@ wait(uint64 addr)
   }
 }
 
-// Per-CPU process scheduler.
+static void mlfq_priority_boost(void) {
+  for (int cpu = 0; cpu < NCPU; cpu++) {
+    for (int level = 1; level < NMLFQ; level++) {
+      acquire(&mlfq[level][cpu].lock);
+      struct proc *p = mlfq[level][cpu].head;
+      mlfq[level][cpu].head = 0;
+      mlfq[level][cpu].tail = 0;
+      release(&mlfq[level][cpu].lock);
+      
+      while (p) {
+        struct proc *next = p->rq_next;
+        p->rq_next = 0;
+        acquire(&p->lock);
+        if (p->state == RUNNABLE) {
+          p->priority = 0;
+          p->ticks_in_queue = 0;
+          release(&p->lock);
+          acquire(&mlfq[0][cpu].lock);
+          rq_push(&mlfq[0][cpu], p);
+          release(&mlfq[0][cpu].lock);
+        } else {
+          release(&p->lock);
+        }
+        p = next;
+      }
+    }
+  }
+}
+
 void
 scheduler(void)
 {
@@ -676,13 +710,26 @@ scheduler(void)
   for(;;){
     intr_on();
 
+    acquire(&tickslock);
+    if (ticks - mlfq_boost_ticks >= MLFQ_BOOST_INTERVAL) {
+      mlfq_boost_ticks = ticks;
+      release(&tickslock);
+      mlfq_priority_boost();
+    } else {
+      release(&tickslock);
+    }
+
     int id = cpuid();
-    acquire(&rq[id].lock);
-    struct proc *p = rq_pop(&rq[id]);
-    release(&rq[id].lock);
+    struct proc *p = 0;
+    
+    for (int level = 0; level < NMLFQ; level++) {
+      acquire(&mlfq[level][id].lock);
+      p = rq_pop(&mlfq[level][id]);
+      release(&mlfq[level][id].lock);
+      if (p) break;
+    }
     
     if (!p) {
-      intr_on();
       asm volatile("wfi");
       continue;
     }
@@ -723,6 +770,17 @@ yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
+  
+  p->ticks_in_queue++;
+  
+  int quantum = 1 << p->priority;
+  if (p->ticks_in_queue >= quantum) {
+    if (p->priority < NMLFQ - 1) {
+      p->priority++;
+    }
+    p->ticks_in_queue = 0;
+  }
+  
   p->state = RUNNABLE;
   make_runnable(p);
   sched();
@@ -782,6 +840,8 @@ wakeup(void *chan)
     if (!p) continue;
     acquire(&p->lock);
     if(p->state == SLEEPING && p->chan == chan) {
+      p->priority = 0;
+      p->ticks_in_queue = 0;
       p->state = RUNNABLE;
       make_runnable(p);
     }
@@ -798,6 +858,8 @@ kill(int pid)
     if(p->pid == pid){
       p->killed = 1;
       if(p->state == SLEEPING){
+        p->priority = 0;
+        p->ticks_in_queue = 0;
         p->state = RUNNABLE;
         make_runnable(p);
       }
@@ -824,6 +886,8 @@ kill(int pid)
     if(p->pid == pid){
       p->killed = 1;
       if(p->state == SLEEPING){
+        p->priority = 0;
+        p->ticks_in_queue = 0;
         p->state = RUNNABLE;
         make_runnable(p);
       }

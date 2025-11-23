@@ -110,4 +110,7 @@ struct proc {
   // Run queue link (intrusive list)
   struct proc *rq_next;        // Next in run queue
 
+  // MLFQ fields
+  int priority;                // Current priority level (0=highest)
+  uint ticks_in_queue;         // Ticks used in current priority level
 };
